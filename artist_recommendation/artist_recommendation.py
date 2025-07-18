@@ -6,21 +6,22 @@ from sklearn.neighbors import NearestNeighbors
 from enum import Enum
 
 '''
-Make sure you've run through pseudo_user_creation.ipynb first (unless the json files are already in the repo,
+Make sure you've run through user_creation/psuedo_user_creation.ipynb first (unless the json files are already in the repo,
 which they may be.)
 
 If they're not:
 
 |--------------------------------------------------------------------------------------------------------|
-cd to spotify_playlist_and_artist_recommendations, then run:                                             |
+cd to the project root directory, then run:                                                              |
                                                                                                          |
 jupyter notebook                                                                                         |
                                                                                                          |
-and navigate to it in your browser to run it, downloading the pseudo_user files will take a bit!         |
+and navigate to user_creation/psuedo_user_creation.ipynb in your browser to run it.                      |
+Downloading the pseudo_user files will take a bit!                                                       |
 |--------------------------------------------------------------------------------------------------------|
 
 When you're back follow the commands below to run this code, ensure the pseudo-users-avg/elbow-data files
-are present in this directory, they potentially may be just because we pushed them up, if they are
+are present in the user_creation directory, they potentially may be just because we pushed them up, if they are
 no need to reproduce them.
 
 |--------------------------------------|
@@ -32,8 +33,8 @@ python3 artist_recommendation.py       |
 '''
 
 # Set to true to enable cli prompts for artist names, [optional] ---|
-ENABLE_INTERACTIVE_MODE = False # <---------------------------------|
-FILE_PATH = 'pseudo-users-elbow-data.json'
+ENABLE_INTERACTIVE_MODE = True # <---------------------------------|
+FILE_PATH = '../user_creation/pseudo-users-elbow-data.json'
 NAME = 'name'
 ARTIST_URI = "artist_uri"
 URI = 'uri'
