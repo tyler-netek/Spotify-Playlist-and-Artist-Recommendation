@@ -4,6 +4,7 @@ import numpy as np
 from scipy.sparse import csr_matrix
 from sklearn.neighbors import NearestNeighbors
 from enum import Enum
+from sklearn.metrics.pairwise import cosine_similarity
 
 '''
 Make sure you've run through user_creation/psuedo_user_creation.ipynb first (unless the json files are already in the repo,
@@ -33,11 +34,13 @@ python3 artist_recommendation.py       |
 '''
 
 # Set to true to enable cli prompts for artist names, [optional] ---|
-ENABLE_INTERACTIVE_MODE = True # <---------------------------------|
+ENABLE_INTERACTIVE_MODE = False # <---------------------------------|
 FILE_PATH = '../user_creation/pseudo-users-elbow-data.json'
 NAME = 'name'
 ARTIST_URI = "artist_uri"
 URI = 'uri'
+K = 10
+EVALUATION_SIZES = [100, 1_000, 10_000]
 
 class Match(Enum):
     EXIT = 'exit'
@@ -77,7 +80,7 @@ def get_artist_data(synthetic_users):
 def make_cooccurrence_matrix(playlists, artist_to_id):
     cooccurrence_counts = defaultdict(int)
     num_artists = len(artist_to_id)
-    print("Building co occurrence matrix..")
+    print("Building cooccurrence matrix..")
     for playlist in playlists:
         artists_in_playlist = {
             track[ARTIST_URI] for track
@@ -107,7 +110,7 @@ def make_cooccurrence_matrix(playlists, artist_to_id):
             data.append(count)
 
     cooccurrence_matrix = csr_matrix((data, (rows, cols)), shape=(num_artists, num_artists))
-    print("Co occurrence matrix built successfully\n")
+    print("Cooccurrence matrix built successfully\n")
     return cooccurrence_matrix
 
 class ArtistRecommender:
@@ -119,14 +122,14 @@ class ArtistRecommender:
         self.knn.fit(self.cooccurrence_matrix)
         print("Artist Recommender initialized\n")
 
-    def get_recs(self, artist_uri, k=10):
+    def get_recs(self, artist_uri, k=K):
         if artist_uri not in self.artist_to_id:
             artist_name = "Unknown Artist"
             for _, info in self.id_to_artist.items():
                 if info[URI] == artist_uri:
                     artist_name = info[NAME]
                     break
-            print("Artist '{}' with URI {} not found in the dataset.".format(artist_name, artist_uri))
+            print("Artist `{}` with URI {} not found in the dataset.".format(artist_name, artist_uri))
             return list()
 
         artist_id = self.artist_to_id[artist_uri]
@@ -164,24 +167,25 @@ def find_artist_by_name(query, id_to_artist):
 
 def run_interactive_mode(recommender, id_to_artist):
     while True:
-        query = input("Enter an artist name to get recommendations (or type 'exit' to quit): ")
+        query = input("Enter an artist name to get recommendations or type 'exit' to quit: ")
         if query.lower() == Match.EXIT.value:
             break
         match_type, artist_info = find_artist_by_name(query, id_to_artist)
 
-        if match_type.lower() == Match.EXACT.value:
-            present(recommender, [artist_info[URI]], id_to_artist, k=10)
-        elif match_type.lower() == Match.PARTIAL.value:
-            suggestion = input("\nDid you mean '{}'? (yes/no): ".format(artist_info[NAME]))
-            if suggestion.lower() == Match.YES.value:
-                present(recommender, [artist_info[URI]], id_to_artist, k=10)
-            else:
-                print("\nOk - please try your search again.\n")
+        if artist_info:
+            if match_type.lower() == Match.EXACT.value:
+                present(recommender, [artist_info[URI]], id_to_artist, k=K)
+            elif match_type.lower() == Match.PARTIAL.value:
+                suggestion = input("\nDid you mean '{}'? (yes/no): ".format(artist_info[NAME]))
+                if suggestion.lower() == Match.YES.value:
+                    present(recommender, [artist_info[URI]], id_to_artist, k=K)
+                else:
+                    print("\nOk - please try your search again.\n")
         else:
             print("No artist matching `{}` found in the dataset\n".format(query))
 
-def present(recommender, artists_to_test, id_to_artist, k=10):
-    print("\n\t\tARTIST RECOMMENDATION RESULTS\n")
+def present(recommender, artists_to_test, id_to_artist, k=K):
+    print("\n\t\tArtist recommendation results\n")
     for artist_uri in artists_to_test:
         if artist_uri in recommender.artist_to_id:
              artist_id = recommender.artist_to_id[artist_uri]
@@ -193,6 +197,74 @@ def present(recommender, artists_to_test, id_to_artist, k=10):
             print("\t{}.) {}".format(idx + 1, artist[NAME]))
         print('\n')
 
+def build_ground_truth(playlists, artist_to_id):
+    ground_truth = defaultdict(set)
+    for playlist in playlists:
+        artists_in_playlist = {
+            track[ARTIST_URI] for track
+            in playlist["tracks"] if track[ARTIST_URI]
+            in artist_to_id
+        }
+        for artist_uri in artists_in_playlist:
+            ground_truth[artist_uri].update(artists_in_playlist)
+    
+    for artist_uri, co_artists in ground_truth.items():
+        co_artists.discard(artist_uri)
+    return ground_truth
+
+def calculate_diversity(recs, recommender):
+    if len(recs) < 2:
+        return 0.0
+    rec_ids = [recommender.artist_to_id[rec[URI]] for rec in recs]
+    rec_vectors = recommender.cooccurrence_matrix[rec_ids]
+    similarity_matrix = cosine_similarity(rec_vectors)
+    dissimilarity = 1 - similarity_matrix
+    return np.mean(dissimilarity[np.triu_indices(len(recs), k=1)])
+
+def evaluate_recommender(recommender, ground_truth, artists_to_evaluate, k=K):
+    total_recall, total_precision, total_map, total_diversity = (
+        0.0, 0.0, 0.0, 0.0
+    )
+    all_recommended_items = set()
+    evaluated_count = 0
+
+    for artist_uri in artists_to_evaluate:
+        relevant_items = ground_truth.get(artist_uri)
+        if not relevant_items:
+            continue
+        recs = recommender.get_recs(artist_uri, k=k)
+        if not recs:
+            continue
+        recommended_uris = {rec[URI] for rec in recs}
+        all_recommended_items.update(recommended_uris)
+        true_positives = len(recommended_uris.intersection(relevant_items))
+        total_recall += true_positives/len(relevant_items)
+        total_precision += true_positives/k
+        total_diversity += calculate_diversity(recs, recommender)
+        ap = 0.0
+        hits = 0
+        for i, rec in enumerate(recs):
+            if rec[URI] in relevant_items:
+                hits += 1
+                ap += hits/(i + 1)
+        total_map += ap/len(relevant_items) if relevant_items else 0.0
+        evaluated_count += 1
+    avg_recall = total_recall/evaluated_count if evaluated_count > 0 else 0
+    avg_precision = total_precision/evaluated_count if evaluated_count > 0 else 0
+    mean_ap = total_map/evaluated_count if evaluated_count > 0 else 0
+    avg_diversity = total_diversity/evaluated_count if evaluated_count > 0 else 0
+    coverage = len(all_recommended_items)/len(recommender.artist_to_id) if recommender.artist_to_id else 0
+    
+    print("\nEvaluation Results")
+    print("Artists Evaluated:\t\t{}".format(evaluated_count))
+    print("Recall@{}:\t\t\t{:.4f}".format(k, avg_recall))
+    print("Precision@{}:\t\t\t{:.4f}".format(k, avg_precision))
+    print("Mean Avg Precision:\t{:.4f}".format(mean_ap))
+    print("Coverage:\t\t\t{:.4f}".format(coverage))
+    print("Diversity:\t\t\t{:.4f}".format(avg_diversity))
+    
+    return avg_recall, avg_precision
+
 synthetic_users_data = load_data(FILE_PATH)
 playlists, artist_to_id, id_to_artist, unique_artist_uris = get_artist_data(synthetic_users_data)
 cooccurrence_matrix = make_cooccurrence_matrix(playlists, artist_to_id)
@@ -201,9 +273,13 @@ recommender = ArtistRecommender(cooccurrence_matrix, id_to_artist, artist_to_id)
 if ENABLE_INTERACTIVE_MODE:
     run_interactive_mode(recommender, id_to_artist)
 else:
-    n_artists_to_test = 1
-    artists_to_test = list(unique_artist_uris)[:n_artists_to_test]
-    present(recommender, artists_to_test, id_to_artist, k=10) 
+    print("Building ground truth for evaluation..")
+    ground_truth = build_ground_truth(playlists, artist_to_id)
+
+    for size in EVALUATION_SIZES:
+        print("\nRunning evaluation for up to {} artists..".format(size))
+        artists_to_evaluate = list(unique_artist_uris)[:size]
+        evaluate_recommender(recommender, ground_truth, artists_to_evaluate, k=K) 
 
 '''
 Note:
